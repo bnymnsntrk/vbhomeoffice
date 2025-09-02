@@ -5,3 +5,5 @@ python -m pip install -r requirements.txt
 python remote_tracker.py
 
 monthly.json will be created. don't delete it.
+
+recommended with python 3.10.
