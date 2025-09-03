@@ -5,6 +5,13 @@ import json
 import os
 import math
 
+# Optional holidays support
+try:
+    import holidays
+    HAS_HOLIDAYS = True
+except Exception:
+    HAS_HOLIDAYS = False
+
 DATA_FILE = "monthly.json"
 
 def load_data():
@@ -30,9 +37,25 @@ def toggle_status(day):
     save_data()
     draw_calendar()
 
+def is_holiday(dt: datetime.date):
+    """Return True if dt is a country holiday (Turkey) and holidays module available."""
+    if not HAS_HOLIDAYS:
+        return False
+    # build holiday range object once (covering nearby years)
+    # we create lazily on first call
+    global TR_HOLIDAYS_CACHE
+    if "TR_HOLIDAYS_CACHE" not in globals():
+        y = today.year
+        TR_HOLIDAYS_CACHE = holidays.Turkey(years=range(y-1, y+2))
+    return dt in TR_HOLIDAYS_CACHE
+
 def calculate_stats():
     month_days = calendar.monthrange(year, month)[1]
-    workdays = [d for d in range(1, month_days+1) if datetime.date(year, month, d).weekday() < 5]
+    workdays = []
+    for d in range(1, month_days+1):
+        dt = datetime.date(year, month, d)
+        if dt.weekday() < 5 and not is_holiday(dt):  # Mon-Fri and not holiday
+            workdays.append(d)
 
     izin_days = [d for d in workdays if month_data.get(str(d)) == "I"]
     effective_workdays = len(workdays) - len(izin_days)
@@ -63,7 +86,7 @@ def draw_calendar():
         widget.destroy()
 
     # Başlık
-    lbl = tk.Label(header_frame, text=f"{calendar.month_name[month]} {year}", 
+    lbl = tk.Label(header_frame, text=f"{calendar.month_name[month]} {year}",
                    font=("Arial", 14, "bold"), bg="#e0ded3")
     lbl.pack(side="left", padx=20)
 
@@ -94,24 +117,36 @@ def draw_calendar():
                 tk.Label(frame, text="", width=6, height=3, relief="solid", bg="#f0f0f0").grid(row=row, column=col)
             else:
                 status = month_data.get(str(day), "")
+                dt = datetime.date(year, month, day)
                 is_weekend = col >= 5
+                holiday_flag = is_holiday(dt)
 
                 color = "white"
-                if is_weekend:
+                if is_weekend or holiday_flag:
                     color = "black"
+                    fg = "white"
                 elif status == "O":
                     color = "lightgreen"
+                    fg = "black"
                 elif status == "E":
                     color = "yellow"
+                    fg = "black"
                 elif status == "I":
                     color = "lightblue"
+                    fg = "black"
+                else:
+                    fg = "black"
 
-                btn = tk.Button(frame, text=str(day), width=6, height=3, relief="solid",
-                                bg=color, command=lambda d=day: toggle_status(d))
-                btn.grid(row=row, column=col)
+                if is_weekend or holiday_flag:
+                    # non-clickable label for weekends/holidays
+                    tk.Label(frame, text=str(day), width=6, height=3, relief="solid", bg=color, fg=fg).grid(row=row, column=col)
+                else:
+                    btn = tk.Button(frame, text=str(day), width=6, height=3, relief="solid",
+                                    bg=color, fg=fg, command=lambda d=day: toggle_status(d))
+                    btn.grid(row=row, column=col)
 
     # Legend
-    legends = [("Ofis", "lightgreen"), ("Ev", "yellow"), ("İzin", "lightblue"), ("Hafta sonu", "black")]
+    legends = [("Ofis", "lightgreen"), ("Ev", "yellow"), ("İzin", "lightblue"), ("Hafta sonu / Resmi tatil", "black")]
     for text, color in legends:
         tk.Label(legend_frame, text="  ", bg=color, width=2).pack(side="left", padx=2)
         tk.Label(legend_frame, text=text, bg="#e0ded3").pack(side="left", padx=5)
