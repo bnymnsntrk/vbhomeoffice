@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import colorchooser
+from tkinter import colorchooser, messagebox
 import calendar
 import datetime
 import json
@@ -102,13 +102,9 @@ def build_workday_sequence_centered(y, m):
 def detect_ev_violation(y, m):
     """
     Yeni mantık:
-    - Önceki/şimdiki/sonraki ayları kapsayan işgünü dizisini al.
-    - Bu dizide birbirinden O (ofis) veya boş ("" or missing) ile ayrılmış
-      *segmentler* oluştur; segment içinde sadece E veya I olabilir.
-      - Pratik olarak: bir segment, arada O/"" bulunan yerlerde bölünür.
-    - Her segment için toplam E sayısını hesapla.
-      Eğer herhangi bir segmentte toplam E >= 4 ise ihlal var.
-    Bu sayede araya kaç adet I girerse girsin, E'lerin toplamı 4'ü buluyorsa ihlal tespit edilir.
+    - build_workday_sequence_centered ile diziyi al
+    - ardışık non-office blokları (E veya I) oluştur
+    - her blokta toplam E sayısını hesapla; E >= 4 ise ihlal
     """
     seq = build_workday_sequence_centered(y, m)
 
@@ -183,6 +179,21 @@ def change_month(delta):
     month_data = data.setdefault(f"{year}-{month}", {})
     draw_calendar()
 
+# ---------- YENİ: o ayı temizle (solda) ----------
+def clear_current_month():
+    global month_data
+    key = f"{year}-{month}"
+    ok = messagebox.askyesno("Onay", f"{calendar.month_name[month]} {year} içindeki tüm kayıtlar silinecek. Emin misin?")
+    if not ok:
+        return
+    if key in data:
+        del data[key]
+    # yeniden month_data referansını ayarla (boş dict)
+    month_data = data.setdefault(f"{year}-{month}", {})
+    save_data()
+    draw_calendar()
+# -------------------------------------------------------------------
+
 def draw_calendar():
     # temizle önceki
     for widget in frame.winfo_children():
@@ -196,6 +207,10 @@ def draw_calendar():
     lbl = tk.Label(header_frame, text=f"{calendar.month_name[month]} {year}",
                    font=("Arial", 14, "bold"), bg="#e0ded3")
     lbl.pack(side="left", padx=20)
+
+    # Yeni: temizle butonu sola ekle
+    clear_btn = tk.Button(header_frame, text="Ayı Temizle", fg="white", bg="#d9534f", command=clear_current_month)
+    clear_btn.pack(side="left", padx=6)
 
     tk.Button(header_frame, text="◀ Önceki Ay", command=lambda: change_month(-1)).pack(side="left", padx=10)
     tk.Button(header_frame, text="Sonraki Ay ▶", command=lambda: change_month(1)).pack(side="right", padx=10)
@@ -223,7 +238,7 @@ def draw_calendar():
 
     # yeni: uyarı label'ı (minimal, pencere boyutunu bozmayacak şekilde)
     if violation:
-        warning_label.config(text="UYARI: 4 iş günü üst üste ev seçilemez!", fg="darkred", bg="#e0ded3")
+        warning_label.config(text="UYARI: 4 iş günü toplamında 'Ev' (İzin aralıklı olsa bile) >= 4 bulundu! (Durum: Karşılanmadı)", fg="darkred", bg="#e0ded3")
         if not warning_label.winfo_ismapped():
             warning_label.pack(pady=(2,4))
     else:
