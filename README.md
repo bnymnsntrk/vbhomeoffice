@@ -1,6 +1,6 @@
 # Home Office Tracker for Yellow Bank
 
-python -m pip install -r requirements.txt
+python -m pip install -r requirements.txt (python -m pip install holidays)
 
 python remote_tracker.py
 
