@@ -56,7 +56,6 @@ def get_color_for(status_code):
 def choose_color_for(status_code):
     """Open color chooser and set chosen color for status_code (O/E/I)."""
     initial = get_color_for(status_code)
-    # colorchooser returns ( (r,g,b), "#rrggbb") or (None, None) if cancelled
     picked = colorchooser.askcolor(color=initial, title=f"Renk seç - {status_code}")
     if picked is None:
         return
@@ -68,6 +67,80 @@ def choose_color_for(status_code):
     data["__colors__"] = colors
     save_data()
     draw_calendar()
+
+# ---------- yeni: ihlal (E sayısı across I blocks) tespiti ----------
+def prev_month(y, m):
+    if m == 1:
+        return y - 1, 12
+    return y, m - 1
+
+def next_month(y, m):
+    if m == 12:
+        return y + 1, 1
+    return y, m + 1
+
+def build_workday_sequence_centered(y, m):
+    """Önceki, bu ve sonraki ayı kapsayan işgünü dizisi (sıralı)."""
+    months = []
+    py, pm = prev_month(y, m)
+    ny, nm = next_month(y, m)
+    months.append((py, pm))
+    months.append((y, m))
+    months.append((ny, nm))
+
+    seq = []
+    for yy, mm in months:
+        _, last = calendar.monthrange(yy, mm)
+        for d in range(1, last + 1):
+            dt = datetime.date(yy, mm, d)
+            # iş günü: hafta içi ve resmi tatil değil
+            if dt.weekday() < 5 and not is_holiday(dt):
+                seq.append(dt)
+    seq = sorted(set(seq))
+    return seq
+
+def detect_ev_violation(y, m):
+    """
+    Yeni mantık:
+    - Önceki/şimdiki/sonraki ayları kapsayan işgünü dizisini al.
+    - Bu dizide birbirinden O (ofis) veya boş ("" or missing) ile ayrılmış
+      *segmentler* oluştur; segment içinde sadece E veya I olabilir.
+      - Pratik olarak: bir segment, arada O/"" bulunan yerlerde bölünür.
+    - Her segment için toplam E sayısını hesapla.
+      Eğer herhangi bir segmentte toplam E >= 4 ise ihlal var.
+    Bu sayede araya kaç adet I girerse girsin, E'lerin toplamı 4'ü buluyorsa ihlal tespit edilir.
+    """
+    seq = build_workday_sequence_centered(y, m)
+
+    # map date -> status (from data)
+    status_map = {}
+    for dt in seq:
+        key = f"{dt.year}-{dt.month}"
+        md = data.get(key, {})
+        status_map[dt] = md.get(str(dt.day), "")
+
+    # Oluştur: ardışık "non-office" blokları, non-office = E veya I
+    blocks = []
+    current_block = []
+    for dt in seq:
+        st = status_map.get(dt, "")
+        if st in ("E", "I"):
+            current_block.append((dt, st))
+        else:
+            if current_block:
+                blocks.append(current_block)
+                current_block = []
+    if current_block:
+        blocks.append(current_block)
+
+    # Her block içinde toplam 'E' sayısını kontrol et
+    for block in blocks:
+        e_count = sum(1 for (_dt, st) in block if st == "E")
+        if e_count >= 4:
+            return True
+
+    return False
+# -------------------------------------------------------------------
 
 def calculate_stats():
     month_days = calendar.monthrange(year, month)[1]
@@ -129,7 +202,16 @@ def draw_calendar():
 
     # İstatistik
     workdays, effective, ofis_days, required_min = calculate_stats()
-    condition_ok = (ofis_days >= required_min)
+
+    # yeni: ihlal kontrolü (E across I blocks)
+    violation = detect_ev_violation(year, month)
+
+    # Eğer ihlal varsa durum her durumda "Karşılanmadı"
+    if violation:
+        condition_ok = False
+    else:
+        condition_ok = (ofis_days >= required_min)
+
     status = "Karşılandı" if condition_ok else "Karşılanmadı"
     status_color = "green" if condition_ok else "red"
 
@@ -138,6 +220,15 @@ def draw_calendar():
              f"Ofis günleri: {ofis_days} | Min %50: {required_min} | Durum: {status}",
         fg=status_color
     )
+
+    # yeni: uyarı label'ı (minimal, pencere boyutunu bozmayacak şekilde)
+    if violation:
+        warning_label.config(text="UYARI: 4 iş günü üst üste ev seçilemez!", fg="darkred", bg="#e0ded3")
+        if not warning_label.winfo_ismapped():
+            warning_label.pack(pady=(2,4))
+    else:
+        if warning_label.winfo_ismapped():
+            warning_label.pack_forget()
 
     # Gün isimleri
     days = ["Pzt", "Sal", "Çar", "Per", "Cum", "Cmt", "Paz"]
@@ -182,7 +273,6 @@ def draw_calendar():
         f = tk.Frame(legend_frame, bg="#e0ded3")
         f.pack(side="left", padx=8)
         color = get_color_for(status_code)
-        # small color preview button
         color_btn = tk.Button(f, width=3, height=1, bg=color,
                               command=lambda sc=status_code: choose_color_for(sc))
         color_btn.pack(side="left")
@@ -223,6 +313,9 @@ legend_frame.pack(pady=5)
 # Sabit stats label
 stats_label = tk.Label(root, text="", bg="#e0ded3", font=("Arial", 10))
 stats_label.pack(pady=5)
+
+# Yeni: minimal warning label (ilk başta gizli)
+warning_label = tk.Label(root, text="", bg="#e0ded3", font=("Arial", 10, "bold"))
 
 draw_calendar()
 root.mainloop()
