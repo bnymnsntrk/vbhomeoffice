@@ -104,7 +104,8 @@ def detect_ev_violation(y, m):
     Yeni mantık:
     - build_workday_sequence_centered ile diziyi al
     - ardışık non-office blokları (E veya I) oluştur
-    - her blokta toplam E sayısını hesapla; E >= 4 ise ihlal
+    - her blokta toplam E sayısını hesapla
+    - Eğer E >= 4 VE bu blok içinde geçerli aya ait gün varsa: ihlal
     """
     seq = build_workday_sequence_centered(y, m)
 
@@ -132,10 +133,13 @@ def detect_ev_violation(y, m):
     # Her block içinde toplam 'E' sayısını kontrol et
     for block in blocks:
         e_count = sum(1 for (_dt, st) in block if st == "E")
-        if e_count >= 4:
+        # blok geçerli ayı içeriyor mu?
+        contains_current_month = any(_dt.year == y and _dt.month == m for (_dt, st) in block)
+        if e_count >= 4 and contains_current_month:
             return True
 
     return False
+
 # -------------------------------------------------------------------
 
 def calculate_stats():
@@ -238,7 +242,7 @@ def draw_calendar():
 
     # yeni: uyarı label'ı (minimal, pencere boyutunu bozmayacak şekilde)
     if violation:
-        warning_label.config(text="UYARI: 4 iş günü toplamında 'Ev' (İzin aralıklı olsa bile) >= 4 bulundu! (Durum: Karşılanmadı)", fg="darkred", bg="#e0ded3")
+        warning_label.config(text="UYARI: 4 iş günü üst üste 'ev' seçilemez!", fg="darkred", bg="#e0ded3")
         if not warning_label.winfo_ismapped():
             warning_label.pack(pady=(2,4))
     else:
