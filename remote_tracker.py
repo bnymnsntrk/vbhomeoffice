@@ -1,28 +1,89 @@
 import tkinter as tk
+from tkinter import colorchooser
 import calendar
 import datetime
 import json
 import os
 import math
 
-# Optional holidays support
+# Eğer holidays yüklüyse tatilleri kullan; yüklü değilse sadece hafta sonlarını tatil sayar
 try:
     import holidays
+    TR_HOLIDAYS = holidays.Turkey()
     HAS_HOLIDAYS = True
 except Exception:
+    TR_HOLIDAYS = None
     HAS_HOLIDAYS = False
 
 DATA_FILE = "monthly.json"
 
+# Default renk atamaları (Ofis, Ev, İzin)
+DEFAULT_COLORS = {
+    "O": "#66bb6a",   # Ofis (yeşil)
+    "E": "#ffd54f",   # Ev (sarı)
+    "I": "#8ecae6"    # İzin (mavi)
+}
+
+# Kodlar:
+# "O" = Ofis
+# "E" = Ev
+# "I" = İzin
+# ""  = boş (henüz işaretlenmemiş)
+
 def load_data():
     if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r") as f:
-            return json.load(f)
-    return {}
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            try:
+                return json.load(f)
+            except Exception:
+                return {}
+    # başlangıç yapı
+    return {"__colors__": DEFAULT_COLORS.copy()}
 
 def save_data():
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f)
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def is_holiday(dt: datetime.date):
+    if not HAS_HOLIDAYS:
+        return False
+    return dt in TR_HOLIDAYS
+
+def get_color_for(status_code):
+    colors = data.get("__colors__", {})
+    return colors.get(status_code, DEFAULT_COLORS.get(status_code, "#ffffff"))
+
+def choose_color_for(status_code):
+    """Open color chooser and set chosen color for status_code (O/E/I)."""
+    initial = get_color_for(status_code)
+    # colorchooser returns ( (r,g,b), "#rrggbb") or (None, None) if cancelled
+    picked = colorchooser.askcolor(color=initial, title=f"Renk seç - {status_code}")
+    if picked is None:
+        return
+    hex_color = picked[1]
+    if not hex_color:
+        return
+    colors = data.setdefault("__colors__", DEFAULT_COLORS.copy())
+    colors[status_code] = hex_color
+    data["__colors__"] = colors
+    save_data()
+    draw_calendar()
+
+def calculate_stats():
+    month_days = calendar.monthrange(year, month)[1]
+    workdays = []
+    for d in range(1, month_days + 1):
+        dt = datetime.date(year, month, d)
+        if dt.weekday() < 5 and not is_holiday(dt):
+            workdays.append(d)
+
+    izin_days = [d for d in workdays if month_data.get(str(d)) == "I"]
+    effective_workdays = len(workdays) - len(izin_days)
+
+    ofis_days = sum(1 for d in workdays if month_data.get(str(d)) == "O")
+    required_min = math.ceil(effective_workdays * 0.5)
+
+    return len(workdays), effective_workdays, ofis_days, required_min
 
 def toggle_status(day):
     current = month_data.get(str(day), "")
@@ -37,34 +98,6 @@ def toggle_status(day):
     save_data()
     draw_calendar()
 
-def is_holiday(dt: datetime.date):
-    """Return True if dt is a country holiday (Turkey) and holidays module available."""
-    if not HAS_HOLIDAYS:
-        return False
-    # build holiday range object once (covering nearby years)
-    # we create lazily on first call
-    global TR_HOLIDAYS_CACHE
-    if "TR_HOLIDAYS_CACHE" not in globals():
-        y = today.year
-        TR_HOLIDAYS_CACHE = holidays.Turkey(years=range(y-1, y+2))
-    return dt in TR_HOLIDAYS_CACHE
-
-def calculate_stats():
-    month_days = calendar.monthrange(year, month)[1]
-    workdays = []
-    for d in range(1, month_days+1):
-        dt = datetime.date(year, month, d)
-        if dt.weekday() < 5 and not is_holiday(dt):  # Mon-Fri and not holiday
-            workdays.append(d)
-
-    izin_days = [d for d in workdays if month_data.get(str(d)) == "I"]
-    effective_workdays = len(workdays) - len(izin_days)
-
-    ofis_days = sum(1 for d in workdays if month_data.get(str(d)) == "O")
-    required_min = math.ceil(effective_workdays * 0.5)
-
-    return len(workdays), effective_workdays, ofis_days, required_min
-
 def change_month(delta):
     global year, month, month_data
     month += delta
@@ -78,6 +111,7 @@ def change_month(delta):
     draw_calendar()
 
 def draw_calendar():
+    # temizle önceki
     for widget in frame.winfo_children():
         widget.destroy()
     for widget in header_frame.winfo_children():
@@ -95,8 +129,9 @@ def draw_calendar():
 
     # İstatistik
     workdays, effective, ofis_days, required_min = calculate_stats()
-    status = "Karşılandı" if ofis_days >= required_min else "Karşılanmadı"
-    status_color = "green" if ofis_days >= required_min else "red"
+    condition_ok = (ofis_days >= required_min)
+    status = "Karşılandı" if condition_ok else "Karşılanmadı"
+    status_color = "green" if condition_ok else "red"
 
     stats_label.config(
         text=f"İş günü: {workdays} | İzin sonrası: {effective} | "
@@ -121,37 +156,49 @@ def draw_calendar():
                 is_weekend = col >= 5
                 holiday_flag = is_holiday(dt)
 
-                color = "white"
                 if is_weekend or holiday_flag:
                     color = "black"
                     fg = "white"
-                elif status == "O":
-                    color = "lightgreen"
-                    fg = "black"
-                elif status == "E":
-                    color = "yellow"
-                    fg = "black"
-                elif status == "I":
-                    color = "lightblue"
-                    fg = "black"
-                else:
-                    fg = "black"
-
-                if is_weekend or holiday_flag:
-                    # non-clickable label for weekends/holidays
+                    # hafta sonu/tatil tıklanmasın
                     tk.Label(frame, text=str(day), width=6, height=3, relief="solid", bg=color, fg=fg).grid(row=row, column=col)
                 else:
+                    # durum rengi data içindeki ayarlanmış renge göre
+                    if status == "O":
+                        color = get_color_for("O")
+                    elif status == "E":
+                        color = get_color_for("E")
+                    elif status == "I":
+                        color = get_color_for("I")
+                    else:
+                        color = "white"
+                    fg = "white" if color.lower() in ("black", "#000000") else "black"
+
                     btn = tk.Button(frame, text=str(day), width=6, height=3, relief="solid",
                                     bg=color, fg=fg, command=lambda d=day: toggle_status(d))
                     btn.grid(row=row, column=col)
 
-    # Legend
-    legends = [("Ofis", "lightgreen"), ("Ev", "yellow"), ("İzin", "lightblue"), ("Hafta sonu / Resmi tatil", "black")]
-    for text, color in legends:
-        tk.Label(legend_frame, text="  ", bg=color, width=2).pack(side="left", padx=2)
-        tk.Label(legend_frame, text=text, bg="#e0ded3").pack(side="left", padx=5)
+    # Legend (tıklayınca colorpicker aç)
+    def make_legend_button(label_text, status_code):
+        f = tk.Frame(legend_frame, bg="#e0ded3")
+        f.pack(side="left", padx=8)
+        color = get_color_for(status_code)
+        # small color preview button
+        color_btn = tk.Button(f, width=3, height=1, bg=color,
+                              command=lambda sc=status_code: choose_color_for(sc))
+        color_btn.pack(side="left")
+        tk.Label(f, text=label_text, bg="#e0ded3").pack(side="left", padx=6)
 
+    make_legend_button("Ofis", "O")
+    make_legend_button("Ev", "E")
+    make_legend_button("İzin", "I")
 
+    # sabit hafta sonu/ tatil legend
+    f2 = tk.Frame(legend_frame, bg="#e0ded3")
+    f2.pack(side="left", padx=8)
+    tk.Label(f2, width=3, height=1, bg="black").pack(side="left")
+    tk.Label(f2, text="Hafta sonu / Resmi tatil", bg="#e0ded3").pack(side="left", padx=6)
+
+# --- UI Başlangıç ---
 root = tk.Tk()
 root.title("Ofis Takip")
 root.configure(bg="#e0ded3")
@@ -160,6 +207,8 @@ today = datetime.date.today()
 year, month = today.year, today.month
 
 data = load_data()
+# ensure colors exist
+data.setdefault("__colors__", DEFAULT_COLORS.copy())
 month_data = data.setdefault(f"{year}-{month}", {})
 
 header_frame = tk.Frame(root, bg="#e0ded3")
